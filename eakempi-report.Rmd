@@ -1,0 +1,627 @@
+---
+title: "Анализ сетей книг"
+author: "Кемпи Елена, eakempi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#загрузим сеть
+library(igraph)
+comics_net = read_graph("~/shared/minor2_2020/data/good_read/book_net.hml", 
+                        format = "graphml")
+#загрузим информацию о книгах
+load("~/shared/minor2_2020/data/good_read/books_net_info.RData")
+
+library(tidyverse)
+```
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#сделаем комиксы в books_net_info в том же порядке, что и в сети
+Name = V(comics_net)$name
+Name = as.data.frame(Name)
+Name = Name %>% mutate(Number = row_number())
+Name$Name = as.numeric(Name$Name)
+books_net_info = left_join(books_net_info, Name, by = c("book_id" = "Name"))
+books_net_info = books_net_info %>% arrange(Number)
+
+#проверяем
+books_net_info = books_net_info %>% 
+  filter(book_id %in% V(comics_net)$name)
+```
+
+## Исследовательские вопросы
+
+Дана сеть из 777 популярных комиксов, где связь между  книгами -- это похожесть по оценкам пользователей (если книги похожи по пользовательским оценкам, то между ними в графе есть связь).
+
+```{r echo = F, warning = FALSE, message = FALSE, results= F}
+#посмотрим, как примерно выглядит граф
+library(ggraph)
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.3) +
+  ggtitle("Сеть из 777 популярных комиксов")
+```
+
+Исследовательские вопросы:
+
+1. Какие комиксы наиболее значимы в сети:
+  - какие имеют наибольшее количество связей, т.е. больше похожи на остальные?
+  - какие вершины являются посредниками между группами комиксов, т.е. какие имеют промежуточные между группами?
+  - какие вершины с наиболее короткими путями до остальных, т.е. наиболее близкие к остальным?
+2. Какие оценки ставят наиболее важным для сети комиксам?
+3. Сколько сообществ можно выявить в сети?
+4. Действительно ли связи в сети чаще возникают между комиксами одного автора?
+5. Действительно ли связи в сети чаще возникают между комиксами из одной серии (например, про Бэтмена)?
+
+## Выявление значимых вершин
+
+**Использованные меры центральности: степень (degree)**
+
+Посмотрим на вершины, у которых больше всего связей, то есть большее количество похожих на них по оценкам комиксов.
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#найдем значения degree и добавим их к датасету
+options(scipen=999)
+Degree = degree(comics_net)
+DEGREE = tibble(Degree)
+DEGREE$book_id = V(comics_net)$name
+DEGREE$book_id = as.numeric(DEGREE$book_id)
+
+books_net_info = books_net_info %>% full_join(DEGREE)
+a = books_net_info %>% arrange(-Degree) %>% top_n(20)
+```
+
+Следующие двадцать комиксов имеют наибольшие показатели центральности по степени:
+
+```{r echo = F, warning = FALSE}
+a %>% select(title, Degree)
+```
+
+**Использованные меры центральности: центральность по посредничеству, битвинность (betweenness)**
+
+Посмотрим, какие вершины являются посредниками между группами комиксов. Для этого используем показатель центральности по посредничеству, битвинность (betweenness).
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#найдем значения betweenness и добавим их к датасету
+Betweenness = betweenness(comics_net)
+BETWEENNESS = tibble(Betweenness)
+BETWEENNESS$book_id = V(comics_net)$name
+BETWEENNESS$book_id = as.numeric(BETWEENNESS$book_id)
+
+books_net_info = books_net_info %>% full_join(BETWEENNESS)
+b = books_net_info %>% arrange(-Betweenness) %>% top_n(20)
+```
+
+
+Следующие двадцать комиксов имеют наибольшие показатели центральности по посредничеству:
+
+```{r echo = F, warning = FALSE}
+b %>% select(title, Betweenness)
+```
+
+**Использованные меры центральности: центральность по близости (closeness)**
+
+Если рассматривать вершины с наиболее короткими путями до остальных, наиболее близкие к остальным, то следующие комиксы имеют наибольшие показатели близости:
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#найдем значения closeness и добавим их к датасету
+Closeness = closeness(comics_net)
+CLOSENESS = tibble(Closeness)
+CLOSENESS$book_id = V(comics_net)$name
+CLOSENESS$book_id = as.numeric(CLOSENESS$book_id)
+
+books_net_info = books_net_info %>% full_join(CLOSENESS)
+c = books_net_info %>% arrange(-Closeness) %>% top_n(20)
+```
+
+Следующие двадцать комиксов имеют наибольшие показатели центральности по посредничеству:
+
+```{r echo = F, warning = FALSE}
+c %>% select(title, Closeness)
+```
+
+Из всех комиксов наибольшие показатели по всем мерам центральности имеет комикс "Y: The Last Man, Vol. 1: Unmanned". 12 из выше перечисленных комиксов являются важными и занимают места в топ-20 по всем мерам центральности:
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#посмотрим, являются ли 20 комиксов в каждой группе важными по всем показателям центральности
+Most = inner_join(a, b)
+Most = inner_join(Most, c)
+```
+
+```{r echo = F, warning = FALSE}
+Most %>% select(title)
+```
+
+#### Визуализация
+
+Визуализируем сеть, учитывая различные меры центральности, но перед этим, посмотрим на некоторые параметры в имеющемся датасете.
+
+##### Серии книг
+
+Посмотрим, влияет ли серия книг на образование связей.
+
+```{r echo = F, warning = FALSE, message = FALSE}
+#Выделим серии книг. Обычно на серию указывают слова перед "Vol.", перед двоеточием или скобками. Вынесем названия серий в отдельную колонку.
+#Выноси слова перед этми знаками и затем оставляем только нужное нам словосочетание
+
+books_net_info$series = str_extract(books_net_info$title, "[:print:]+(?=\\, Vol?)")
+books_net_info$seriesTF = str_detect(books_net_info$title, "[:print:]+(?=\\, Vol?)")
+books_net_info$punctTF = str_detect(books_net_info$series, "[\\:\\(]")
+
+books_net_info$series2 = str_extract(books_net_info$title, "[:print:]+(?=\\: ?)")
+books_net_info$seriesTF2 = str_detect(books_net_info$title, "[:print:]+(?=\\: ?)")
+books_net_info$punctTF2 = str_detect(books_net_info$series2, "[\\:\\(]")
+
+books_net_info$series3 = str_extract(books_net_info$title, "[:print:]+(?=\\([A-z]?)")
+books_net_info$seriesTF3 = str_detect(books_net_info$title, "[:print:]+(?=\\([A-z]?)")
+books_net_info$punctTF3 = str_detect(books_net_info$series3, "[\\:\\(]")
+
+books_net_info$Series = case_when(books_net_info$seriesTF == TRUE & books_net_info$punctTF == FALSE ~ books_net_info$series,
+                                  books_net_info$seriesTF2 == TRUE & books_net_info$punctTF2 == FALSE ~ books_net_info$series2,
+                                  books_net_info$seriesTF3 == TRUE & books_net_info$punctTF3 == FALSE ~ books_net_info$series3,
+                                  TRUE ~ books_net_info$title)
+
+books_net_info = books_net_info %>% select(-series, - series2, -series3, -seriesTF, -seriesTF2, - seriesTF3, -punctTF2, -punctTF3)
+
+#присвоим полученные серии в качестве атрибута к сети
+V(comics_net)$Series = books_net_info$Series
+```
+
+```{r echo = F, warning = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(comics_net)$Series), show.legend = FALSE)+
+  ggtitle("Сеть комиксов с выделением серий")
+```
+
+На графе видно, что книги из одной серии часто располагаются рядом друг с другом, то есть образуют связи и похожи друг на друга, но есть и исключения. Возможно, те серии, которые выбиваются из общего тренда, являются экспериментными, например, когда вводят нового персонажа и рейтинги падают или взлетают. Тем не менее, хоть и есть похожие оценки, они не всегда идентичны.
+
+Посмотрим на показатели ассортативности.
+
+```{r echo = F, warning = FALSE}
+assortativity_real = assortativity_nominal(comics_net, factor(V(comics_net)$Series), directed = F)
+assortativity_real
+```
+Коэффициент ассортативности равен 0.1930176 ,то есть связи склонны формироваться у комиксов одной серии, но эта склонность невелика.
+
+```{r echo = F, warning = FALSE, message = FALSE, results=F}
+g = comics_net
+number_of_permutations = 2000
+set.seed(111)
+assortativity_shuffled  <- rep(NA, number_of_permutations) #создали вектор для скидывания результатов
+for(i in 1:number_of_permutations){
+  V(g)$attr_shuffled = sample(factor(V(g)$Series), replace = F) # перемещиваем
+  assortativity_shuffled[i] = assortativity_nominal(g,as.factor(V(g)$attr_shuffled))
+}
+
+#Квантили при случайном перемешивании
+q <- quantile(assortativity_shuffled, c(0.05, 0.95))
+q
+```
+
+
+```{r echo = F, warning = FALSE}
+#p-value
+pvalue = sum(abs(assortativity_shuffled) >= abs(assortativity_real)) / number_of_permutations
+pvalue
+```
+
+P-value = 0 показывает, что это разделение маловероятно получилось случайно. Связи склонны формироваться у комиксов одной серии, но эта склонность невелика
+
+##### Похожи ли оценки на комиксы одного автора?
+
+Посмотрим, похожи ли оценки на комиксы у одного и того же автора, существует ли связь между ними. Для этого посмотрим каковы связи в комиксах у 11 авторов с наибольшим количеством представленных комиксов (16 комиксов и больше)
+
+```{r echo = F, warning = FALSE, message = FALSE, results='hide'}
+V(comics_net)$author = books_net_info$authors.0.author_id
+books_net_info %>% count(books_net_info$authors.0.author_id, sort = T)
+```
+```{r echo = F, warning = FALSE}
+author1 = delete_vertices(comics_net, V(comics_net)$author != 24514)
+plot(author1, vertex.label.cex = 0.5, main = "Сеть комиксов автора 24514")
+
+author2 = delete_vertices(comics_net, V(comics_net)$author != 12425)
+plot(author2, vertex.label.cex = 0.5, main = "Сеть комиксов автора 12425")
+
+author3 = delete_vertices(comics_net, V(comics_net)$author != 12444)
+plot(author3, vertex.label.cex = 0.5, main = "Сеть комиксов автора 12444")
+
+author4 = delete_vertices(comics_net, V(comics_net)$author != 1221698)
+plot(author4, vertex.label.cex = 0.5, main = "Сеть комиксов автора 1221698")
+
+author5 = delete_vertices(comics_net, V(comics_net)$author != 12772)
+plot(author5, vertex.label.cex = 0.5, main = "Сеть комиксов автора 12772")
+
+author6 = delete_vertices(comics_net, V(comics_net)$author != 70026)
+plot(author6, vertex.label.cex = 0.5, main = "Сеть комиксов автора 70026")
+
+author7 = delete_vertices(comics_net, V(comics_net)$author != 12732)
+plot(author7, vertex.label.cex = 0.5, main = "Сеть комиксов автора 12732")
+
+author8 = delete_vertices(comics_net, V(comics_net)$author != 26306)
+plot(author8, vertex.label.cex = 0.5, main = "Сеть комиксов автора 26306")
+
+author9 = delete_vertices(comics_net, V(comics_net)$author != 3961)
+plot(author7, vertex.label.cex = 0.5, main = "Сеть комиксов автора 3961")
+
+author10 = delete_vertices(comics_net, V(comics_net)$author != 10305)
+plot(author7, vertex.label.cex = 0.5, main = "Сеть комиксов автора 10305")
+
+author11 = delete_vertices(comics_net, V(comics_net)$author != 37450)
+plot(author7, vertex.label.cex = 0.5, main = "Сеть комиксов автора 37450")
+```
+
+Большинство текстов одного и того же автора связаны между собой, то есть у одного автора одинаковые оценки, но есть и исключения, в том числе образование групп комиксов с похожими оценками. 
+
+Посмотрим на расположение на всем графе.
+
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(comics_net)$author), show.legend = FALSE)+
+  ggtitle("Сеть комиксов с выделением авторства")
+```
+
+Часто комиксы одного и того же автора образуют группы, то есть связи между ними "притягивают" их друг к другу, их оценки похожи, но существуют несколько групп одного автора, то есть часто комиксы похожи друг на друга, но их оценки не всегда одинаковые.
+
+Посмотрим на показатели ассортативности.
+
+```{r echo = F, warning = FALSE}
+assortativity_real = assortativity_nominal(comics_net, factor(V(comics_net)$author), directed = F)
+assortativity_real
+```
+Коэффициент ассортативности равен 0.2992721, то есть связи склонны формироваться у комиксов одного автора, но эта склонность невелика.
+
+```{r echo = F, warning = FALSE, message = FALSE, results=F}
+g = comics_net
+number_of_permutations = 2000
+set.seed(111)
+assortativity_shuffled  <- rep(NA, number_of_permutations) #создали вектор для скидывания результатов
+for(i in 1:number_of_permutations){
+  V(g)$attr_shuffled = sample(factor(V(g)$author), replace = F) # перемешиваем
+  assortativity_shuffled[i] = assortativity_nominal(g,as.factor(V(g)$attr_shuffled))
+}
+
+#Квантили при случайном перемешивании
+q <- quantile(assortativity_shuffled, c(0.05, 0.95))
+q
+```
+
+
+```{r echo = F, warning = FALSE}
+#p-value
+pvalue = sum(abs(assortativity_shuffled) >= abs(assortativity_real)) / number_of_permutations
+pvalue
+
+#p-value=0 показывает, что жто маловероятно получилось случайно
+```
+
+P-value = 0 показывает, что это разделение маловероятно получилось случайно. Связи склонны формироваться у комиксов одного автора, но эта склонность невелика.
+
+
+##### Визуализация центральностей
+
+Центральность по *степени* показана размером, *серии книг* показаны цветом
+
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(color = V(comics_net)$Series), size = log(degree(comics_net)), show.legend = FALSE)+
+  ggtitle("Сеть комиксов с выделением серий книг (цветом) \nи центральности по степени (размером вершин)")
+```
+
+Центральность по *степени* показана размером (чем больше размер, тем больше показатель центральности), *авторство* показано цветом
+
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(color = V(comics_net)$author), size = log(degree(comics_net)), show.legend = FALSE)+
+  ggtitle("Сеть комиксов с выделением авторства (цветом) \nи центральности по степени (размером вершин)")
+```
+
+Значимых паттернов в отношении определенного автора или серии комиксов в центральности по степени не наблюдается.
+
+
+Центральность по *посредничеству* показана размером, *серии книг* показаны цветом
+
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(comics_net)$Series), size = log(betweenness(comics_net)), show.legend = FALSE)+
+  ggtitle("Сеть комиксов с выделением серий книг (цветом) \nи центральности по посредничеству (размером вершин)")
+```
+
+Центральность по *посредничеству* показана размером (чем больше размер, тем больше показатель центральности), *авторство* показано цветом
+
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(comics_net)$author), size = log(betweenness(comics_net)), show.legend = FALSE)+
+  ggtitle("Сеть комиксов с выделением авторства (цветом) \nи центральности по посредничеству (размером вершин)")
+```
+
+Значимых паттернов в отношении определенного автора или серии комиксов в центральности по посредничеству не наблюдается.
+
+Центральность по близости показана цветом
+
+```{r echo = F, warning = FALSE, message = FALSE}
+V(comics_net)$Closeness = closeness(comics_net)
+
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(color = Closeness))+
+  ggtitle("Сеть комиксов с выделением центральности по близости (цветом)")
+```
+
+##### Распределение оценок и количества отзывов
+
+Посмотрим на распределение оценок и количества отзывов во всем датасете и каковы они в наиболее важных вершинах (взяты 12 вершин, которые входят в топ-20 по разным показателям центральности).
+
+```{r echo = F, warning = FALSE, message = FALSE}
+books_net_info$average_rating = as.numeric(books_net_info$average_rating)
+books_net_info$ratings_count = as.numeric(books_net_info$ratings_count)
+```
+
+Распределение оценок и количества отзывов во всем датасете:
+
+```{r echo = F, warning = FALSE, message = FALSE}
+ggplot(books_net_info) + 
+  geom_bar(aes(x = average_rating %>% round(1)), fill = "darkblue") + 
+  xlab("Оценка") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение оценок")
+
+ggplot(books_net_info) + 
+  geom_histogram(aes(x = ratings_count), fill = "darkorange") + 
+  xlab("Количество оставленных отзывов") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение комиксов по количеству оставленных отзывов")
+
+ggplot(books_net_info %>% filter(ratings_count < 50000)) + 
+  geom_histogram(aes(x = ratings_count), fill = "darkorange") + 
+  xlab("Количество оставленных отзывов") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение комиксов по количеству оставленных отзывов", subtitle = "(до 50000 отзывов)")
+```
+
+Распределение оценок и количества отзывов наиболее важных вершин:
+
+```{r echo = F, warning = FALSE, message = FALSE}
+Most$ratings_count = as.numeric(Most$ratings_count)
+Most$average_rating = as.numeric(Most$average_rating)
+
+ggplot(Most) + 
+  geom_bar(aes(x = average_rating), fill = "blue") + 
+  xlab("Оценка") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение оценок", subtitle = "среди комиксов с наибольшим значением центральности")
+
+ggplot(Most) + 
+  geom_histogram(aes(x = ratings_count), fill = "orange") + 
+  xlab("Количество оставленных отзывов") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение по количеству оставленных отзывов", subtitle = "среди комиксов с наибольшим значением центральности")
+
+ggplot(Most %>% filter(ratings_count < 200000)) + 
+  geom_histogram(aes(x = ratings_count), fill = "orange") + 
+  xlab("Количество оставленных отзывов") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение по количеству оставленных отзывов (до 200000 отзывов", subtitle = "среди комиксов с наибольшим значением центральности")
+```
+
+#### Выводы
+
+"Y: The Last Man, Vol. 1: Unmanned" является самым важным по всем всем мерам центральности и 12 комиксов являются наиболее важными для сети по разным мерам центральности и занимают место в топ-20. По количеству связей, то есть сколько существует комиксов с похожей оценкой (degree), лидируют "Y: The Last Man, Vol. 1: Unmanned", "Fables, Vol. 1: Legends in Exile", "Saga, Vol. 1 (Saga, #1)", "Batman, Volume 1: The Court of Owls", у которых их 90 и более. По посредничеству, центральными комиксами являются "Y: The Last Man, Vol. 1: Unmanned", "Saga, Vol. 1 (Saga, #1)", "Hawkeye, Volume 1: My Life as a Weapon", "Batman, Volume 1: The Court of Owls", которые являются посредниками между другими комиксами. Наиболее важные комиксы по близости: "Y: The Last Man, Vol. 1: Unmanned", "Saga, Vol. 1 (Saga, #1)", "Watchmen", "Fables, Vol. 1: Legends in Exile". После ознакомления с такими комиксами, пользователь сможет быстрее дойти от одной вершины до другой во всей сети. Можно увидеть, что самые важные в сети комиксы имеют оценку около 4-4.5, в то время как количество отзывов на них разнится.
+
+Оценки комиксов одного автора или из одной серии часто похожи друг на друга, образуя группы с похожими оценками, но оценки не всегда идентичны, поэтому существует несколько групп одного автора или одной серии. Причиной такой разницы могут быть изменения в комиксах (введение новых персонажей, сюжетных линий, др), которые влияют на оценки пользователей. Ассортативность небольшая, что указывает на то, что связь склонна образовываться между комиксами одной серии или автора, но это не является ключевым фактором образования сети.
+
+## Выявление групп книг
+
+**Использованные меры выделения сообществ: Fast-Greedy**
+
+Метод **Fast-Greedy** -- иерархический подход, при котором при вершины представляют собой отдельные сообщества, и объединяются таким образом, чтобы это привело к наибольшему возрастанию модулярности.
+
+```{r echo = F, warning = FALSE, message = FALSE, results='hide'}
+fgcommune <- fastgreedy.community(comics_net)
+fgcommune #28 групп, mod: 0.66
+```
+
+Разделение по такому признаку приводит к выделению 28 сообществ, модулярность равна 0.66, что показывает что сеть разделили на сообщества довольно хорошо.
+
+**Использованные меры выделения сообществ: Walktrap**
+
+Метод **Walktrap** - подход, основанный на случайных путях (больше шансов, что путь будет чаще оставаться внутри сообщества и только иногда выходить за его пределы).
+
+```{r echo = F, warning = FALSE, message = FALSE, results='hide'}
+wtcommune <- walktrap.community(comics_net)
+wtcommune #41 группа, mod: 0.7
+```
+
+Разделение по такому признаку приводит к выделению 41 сообщества, модулярность равна 0.7, что показывает что сеть хорошо разделили на сообщества.
+
+#### Визуализация
+
+Визуализируем полученные сообщества.
+
+Сообщества, полученные методом **Fast-Greedy**
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.1) +
+  geom_node_point(aes(shape = V(comics_net)$author), show.legend = FALSE) +
+  geom_node_text(aes(label = name), colour = membership(fgcommune), size = 1)+
+  ggtitle("Сообщества, полученные методом Fast-Greedy")
+```
+
+Сообщества, полученные методом **Walktrap**
+
+```{r echo = F, warning = FALSE, message = FALSE}
+comics_net %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.1) +
+  geom_node_text(aes(label = name), colour = membership(wtcommune), size = 1)+
+  ggtitle("Сообщества, полученные методом Walktrap")
+```
+
+Так как сеть у нас сформирована по похожести комиксов по оценкам пользователей (если комиксы похожи по пользовательским оценкам, то между ними в графе есть связь), то выделенные сообщества, предположительно, разделяют граф на группы со схожими или идентичными оценками. В первом графе групп 28, а во втором - 41.
+
+
+##### Сообщества Walktrap
+
+Посмотрим, какие факторы могли повлиять на разделение на сообщества. Возьмем сообщества: полученные методом Walktrap, так как модулярность в этом случае больше, и посмотрим на 4 сообществ: 1, 10, 19, 32 (номера взяты случайно).
+
+```{r echo = F, warning = FALSE, message = FALSE}
+V(comics_net)$commune = membership(wtcommune)
+
+com1 = delete_vertices(comics_net, V(comics_net)$commune != 1)
+plot(com1, vertex.label.cex = 0.5, main = "Сообщество 1")
+
+com1_match = match(as.numeric(V(com1)$name), books_net_info$book_id)
+com1_info = books_net_info[com1_match,]
+
+ggplot(com1_info) + 
+  geom_bar(aes(x = as.numeric(average_rating) %>% round(1)), fill = "darkblue") + 
+  xlab("Оценка") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение оценок в сообществе 1")
+
+
+
+com10 = delete_vertices(comics_net, V(comics_net)$commune != 10)
+plot(com10, vertex.label.cex = 0.5, main = "Сообщество 10")
+
+com10_match = match(as.numeric(V(com10)$name), books_net_info$book_id)
+com10_info = books_net_info[com10_match,]
+
+ggplot(com10_info) + 
+  geom_bar(aes(x = as.numeric(average_rating) %>% round(1)), fill = "darkblue") + 
+  xlab("Оценка") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение оценок в сообществе 10")
+
+
+
+com19 = delete_vertices(comics_net, V(comics_net)$commune != 19)
+plot(com19, vertex.label.cex = 0.5, main = "Сообщество 19")
+
+com19_match = match(as.numeric(V(com19)$name), books_net_info$book_id)
+com19_info = books_net_info[com19_match,]
+
+ggplot(com19_info) + 
+  geom_bar(aes(x = as.numeric(average_rating) %>% round(1)), fill = "darkblue") + 
+  xlab("Оценка") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение оценок в сообществе 19")
+
+
+
+
+com32 = delete_vertices(comics_net, V(comics_net)$commune != 32)
+plot(com32, vertex.label.cex = 1, main = "Сообщество 32")
+
+
+com32_match = match(as.numeric(V(com32)$name), books_net_info$book_id)
+com32_info = books_net_info[com32_match,]
+
+ggplot(com32_info) + 
+  geom_bar(aes(x = as.numeric(average_rating) %>% round(1)), fill = "darkblue") + 
+  xlab("Оценка") + 
+  ylab("Количество комиксов") +
+  labs(title = "Распределение оценок в сообществе 32")
+```
+
+Как мы видим, сообщества, могли бы быть выделены по принципу близкой оценки, но это не всегда так, и оценки часто пересекаются в разных сообществах.
+
+Посмотрим, влияют ли **авторство** и **серия** на разбиение сообществ на примере тех же сообществ.
+
+```{r echo = F, warning = FALSE, message = FALSE}
+com1 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com1)$author), show.legend = FALSE)+
+  ggtitle("Сообщество 1 с выделением авторства")
+
+com1 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com1)$Series), show.legend = FALSE)+
+  ggtitle("Сообщество 1 с выделением серии")
+
+
+
+
+
+com10 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com10)$author), show.legend = FALSE)+
+  ggtitle("Сообщество 10 с выделением авторства")
+
+com10 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com10)$Series), show.legend = FALSE)+
+  ggtitle("Сообщество 10 с выделением серии")
+
+
+
+
+
+com19 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com19)$author), show.legend = FALSE)+
+  ggtitle("Сообщество 19 с выделением авторства")
+
+com19 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com19)$Series), show.legend = FALSE)+
+  ggtitle("Сообщество 19 с выделением серии")
+
+
+
+
+
+com32 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com32)$author), show.legend = FALSE)+
+  ggtitle("Сообщество 32 с выделением авторства")
+
+
+com32 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.5) +
+  geom_node_point(aes(colour = V(com32)$Series), show.legend = FALSE)+
+  ggtitle("Сообщество 32 с выделением серии")
+```
+
+Как можно увидеть, некоторые сообщества состаят из комиксов премущественно одной серии или одного авторства. Из этого можно сделать вывод, что на рспределение по сообществам влияло много факторов, включая связи по рейтингу, авторству, сериям и, возможно, другим признакам, которые не были здесь рассмотрены.
+
+#### Выводы
+
+С помощью методов Fast-Greedy и Walktrap были выявлены 28 и 41 сообщества соответственно. Так как сеть у нас сформирована по похожести комиксов по оценкам пользователей (если комиксы похожи по пользовательским оценкам, то между ними в графе есть связь), то выделенные сообщества разделяют граф на группы со схожими или идентичными оценками, но также играют роль и другие факторы, такие как, например, авторство или серия комиксов. 
+
+
+## Общие выводы
+
+Проанализировав сеть из 777 популярных комиксов, где связь между  книгами -- это похожесть по оценкам пользователей, были получены следующие выводы:
+
+- Комикс "Y: The Last Man, Vol. 1: Unmanned" является самым важным по всем всем мерам центральности и 12 комиксов являются наиболее важными для сети по разным мерам центральности и занимают место в топ-20 ("Y: The Last Man, Vol. 1: Unmanned", "Fables, Vol. 1: Legends in Exile", "Saga, Vol. 1 (Saga, #1)", "Batman, Volume 1: The Court of Owls", "Hawkeye, Volume 1: My Life as a Weapon", "Batman, Volume 1: The Court of Owls", "Watchmen" и др.).
+
+-  Авторство и принадлежность к определенной серии влияют на образование связей, но эта связь не является ключевым фактором образования сети. Оценки комиксов одного автора или одной серии похожи друг на друга, образуя группы с похожими оценками, но оценки не всегда идентичны, что ведет к образованию нескольких групп одного автора или одной серии и "выпадающих" из общего тренда комиксов. Причиной такой разницы могут быть изменения в комиксах (введение новых персонажей, сюжетных линий, др), которые влияют на оценки пользователей.
+
+- Так как сеть у нас сформирована по похожести комиксов по оценкам пользователей, то схожесть оценок влиет на выделенные сообществ, но также играют роль и другие факторы, такие как, например, авторство или принадлежность к определенной серии комиксов. 
+
